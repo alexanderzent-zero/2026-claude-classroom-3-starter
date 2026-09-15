@@ -1,6 +1,6 @@
+import { setTodoDoneRequestSchema } from "@ai-tutor/todo-api-schema";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { setTodoDoneRequestSchema } from "@/lib/todo-api-schema";
 import { setTodoDoneFor } from "@/lib/todo-tools";
 
 /**

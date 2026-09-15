@@ -16,7 +16,7 @@
       "!.agents",
       "!public",
       "!drizzle",
-      "!dist",
+      "!**/dist",
       "!build"
     ]
   },

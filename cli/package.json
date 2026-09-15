@@ -1,0 +1,29 @@
+{
+  "name": "ai-tutor-cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ai-tutor": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@ai-tutor/todo-api-schema": "*",
+    "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "@better-auth/drizzle-adapter": "^1.7.4",
+    "@libsql/client": "^0.18.0",
+    "@types/node": "^26.5.1",
+    "better-auth": "^1.7.4",
+    "drizzle-orm": "^0.45.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

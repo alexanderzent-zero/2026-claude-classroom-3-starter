@@ -9,6 +9,17 @@ import { Field } from "@/components/ui/field";
 import { FormError } from "@/components/ui/form-error";
 import { authClient } from "@/lib/auth-client";
 
+/**
+ * Where to land after signing in — `/device` arrives here with `?redirect=`
+ * so approving a CLI's login doesn't lose the code. Read from the live URL
+ * rather than `useSearchParams()` so this page stays statically prerendered
+ * instead of needing a Suspense boundary for a value only read once, on submit.
+ */
+function redirectTarget(): string {
+  const raw = new URLSearchParams(window.location.search).get("redirect");
+  return raw?.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +45,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.replace("/");
+    router.replace(redirectTarget());
     router.refresh();
   }
 

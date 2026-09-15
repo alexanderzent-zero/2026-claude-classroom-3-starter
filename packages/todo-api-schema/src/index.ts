@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 /**
- * Request and response shapes for the /api/todos REST API — the one module a
- * future CLI in this repo imports instead of retyping them. Kept separate from
- * lib/todo-tools.ts's own tool schemas: those describe what the model may
- * pass, these describe the wire format for an external client.
+ * Request and response shapes for the /api/todos REST API — a workspace
+ * package so the web app's route handlers and cli/'s HTTP client both import
+ * these instead of retyping them. Kept separate from lib/todo-tools.ts's own
+ * tool schemas: those describe what the model may pass, these describe the
+ * wire format for an external client.
  */
 
 export const todoSchema = z.object({

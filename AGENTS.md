@@ -10,7 +10,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # Todo Manager
 
-AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra agent served to a CopilotKit chat over AG-UI, behind Better Auth email/password sign-in, over a Drizzle/SQLite persistence layer, with a Vitest + Playwright test harness.
+AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra agent served to a CopilotKit chat over AG-UI, behind Better Auth email/password sign-in, over a Drizzle/SQLite persistence layer, with a Vitest + Playwright test harness. An npm workspace monorepo: this app at the root, `cli/` (the `ai-tutor` command-line client), and `packages/todo-api-schema` (the request/response schemas both share).
 
 ## Commands
 
@@ -18,7 +18,8 @@ AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra 
 - `npm run dev` / `npm run build` / `npm run start`.
 - If a build reports stale generated route types while `tsc --noEmit --incremental false` passes, remove `.next/cache/.tsbuildinfo` before rebuilding.
 - `npm run lint` is `biome check` and `npm run format` is `biome format --write` — Biome only, so never add ESLint or Prettier config.
-- `npm test` (Vitest, single run), `npm run test:watch`, `npm run test:e2e` (Playwright), `npm run test:e2e:llm` (the one spec that spends OpenRouter credit).
+- `npm test` runs this app's Vitest suite, then `cli/`'s (which builds it first); `npm run test:watch`, `npm run test:e2e` (Playwright), `npm run test:e2e:llm` (the one spec that spends OpenRouter credit) all stay app-only.
+- `npm install` at the repo root also runs `cli/`'s and `packages/todo-api-schema`'s own `prepare` script (`tsc`), so `npx ai-tutor` works right after install with no separate build step.
 - `npm run db:generate` writes a migration from the schema and `npm run db:migrate` applies it to `DATABASE_URL`.
 - `npm run auth:generate` regenerates `lib/auth-schema.ts` from the Better Auth config; follow it with `db:generate` + `db:migrate`.
 
@@ -52,16 +53,30 @@ AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra 
 - `lib/auth.ts` is the app instance (explicitly `server-only`, `nextCookies()` last); `lib/auth-cli.ts` exists only because the Better Auth CLI refuses to load a module graph containing `server-only`.
 - Gate pages server-side with `auth.api.getSession({ headers: await headers() })` and `redirect()`; there is deliberately no `proxy.ts`, whose cookie check would not validate anything.
 - Email/password only: when an auth change changes the schema, regenerate it and generate and apply the migration.
-- `lib/auth.ts` also registers the `bearer()` plugin so `/api/todos` can accept `Authorization: Bearer <token>` in place of the session cookie; it adds no schema, so `lib/auth-cli.ts` doesn't need it and `auth:generate` is unaffected.
+- `lib/auth.ts` also registers `bearer()` (see the REST API section) and `deviceAuthorization({ verificationUri: "/device" })` (see `cli/`'s section) — `lib/auth-cli.ts` only needs the latter, since it alone adds a `deviceCode` schema table for `auth:generate` to pick up.
+- `lib/auth-client.ts` adds `deviceAuthorizationClient()` for `app/device/`, the page where a signed-in user approves or denies a code `cli/`'s `ai-tutor login` printed.
 
-## Todo REST API — `app/api/todos/`, `lib/todo-api-schema.ts`
+## Todo REST API — `app/api/todos/`, `packages/todo-api-schema/`
 
-- `GET /api/todos` (optional `?filter=` substring match, case-insensitive), `POST /api/todos`, and `PATCH /api/todos/[id]` (`{ done }`) are for a future CLI or other service, not the app's own pages — see the sidebar bullet above.
+- `GET /api/todos` (optional `?filter=` substring match, case-insensitive), `POST /api/todos`, and `PATCH /api/todos/[id]` (`{ done }`) are for `cli/` or another service, not the app's own pages — see the sidebar bullet above.
 - Chose `bearer()` over `jwt()`: this API lives in the same process and shares the same session store as the cookie-based pages, so `auth.api.getSession` can verify a bearer token with the same DB-backed session lookup it already does for cookies; `jwt()`'s JWKS-based stateless verification is for a separate service that can't reach that database.
 - Each handler reads `request.headers` directly rather than `next/headers`'s `headers()`, which throws "called outside a request scope" when a handler is invoked directly instead of through a live Next.js request — the latter would make the routes untestable.
 - Every write goes through the shared query functions in `lib/todo-tools.ts` so this API and the tutor's tools can't drift apart; a `PATCH` on an id belonging to another user 404s exactly like a nonexistent id, since the query filters by `userId`.
-- Request/response shapes are zod schemas in `lib/todo-api-schema.ts`, the one module a future CLI in this repo should import rather than retyping them.
+- Request/response shapes are zod schemas in the `@ai-tutor/todo-api-schema` workspace package (`packages/todo-api-schema/src/index.ts`), so this app and `cli/` import the same module instead of either retyping them.
 - `tests/unit/todos-api.test.ts` builds its own `betterAuth` instance with `bearer()` + `testUtils()` over a temp db (same pattern as `tests/unit/auth.test.ts`) and mocks `@/lib/auth`/`@/lib/db` to inject it, so the bearer flow is exercised with a real minted token rather than a stub session.
+
+## CLI — `cli/`, `app/device/`
+
+- `cli/` is the `ai-tutor-cli` workspace package; its `bin` is `ai-tutor`, built by `tsc` from `cli/src` to `cli/dist` (see the `prepare` bullet in Commands) since a plain `node` bin can't run TypeScript directly.
+- Commands: `login` (device authorization), `whoami`, `logout`, `add <title>`, `list [--filter]`, `done <id>` — all but `login`/`logout` need a stored token and call the REST API above over `fetch`, importing `@ai-tutor/todo-api-schema` to parse the responses.
+- `login` is Better Auth's device authorization flow (`deviceAuthorization()` in `lib/auth.ts`): `POST /api/auth/device/code` prints the `user_code` and `verification_uri`, then polls `POST /api/auth/device/token` at the returned `interval` until a user approves it at `app/device/` — never opens a browser itself.
+- The minted token is a normal Better Auth session token; `bearer()` is what lets every other command send it as `Authorization: Bearer <token>` instead of a cookie, and `logout` also calls `POST /api/auth/sign-out` with it before deleting the local file.
+- The token lives in `$AI_TUTOR_CONFIG_DIR` (default: `$XDG_CONFIG_HOME/ai-tutor` or `~/.config/ai-tutor`, gh's convention) as `config.json` with `0o600`/`0o700` permissions — never printed, never in the repo. `$AI_TUTOR_SERVER_URL` (default `http://localhost:3000`) is the only other override.
+- `app/device/`'s `DeviceApproval` client component drives Better Auth's own three-step dance (`authClient.device()` to claim the code for the signed-in session, then `.device.approve()`/`.device.deny()`) — it is a normal `AuthCard` screen, gated the same way `/` is, with `/login?redirect=` sending an unauthenticated visitor back once signed in.
+- `cli/tests/cli.integration.test.ts` runs the *built* CLI as a real subprocess against a real `next dev` (own free port, own `NEXT_DIST_DIR=.next-cli-test`, temp `DATABASE_URL`, temp `AI_TUTOR_CONFIG_DIR`) and approves the device code by minting a session with `testUtils()` and calling the live server's `/api/auth/device` endpoints directly — the same thing `app/device/` does, without a browser.
+- That test reuses `lib/auth-config.ts`'s `authOptions` (via a relative import) rather than re-deriving the Drizzle adapter config, which is why `cli/vitest.config.mts` also defines the `@/*` alias onto the repo root — `lib/auth-config.ts`'s own `@/lib/schema` import needs it too.
+- `cli/`, `packages/todo-api-schema/`, and the root app each keep their own `tsconfig.json`; the root's `exclude`s `cli` and `packages` so its single `tsc --noEmit` run doesn't also typecheck them under the app's `bundler` resolution.
+- Running `cli/tests/cli.integration.test.ts` spawns `next dev` against `.next-cli-test`, which — like `.next-e2e` — may re-append its own `tsconfig.json` include entries; harmless, and the same "just commit it" situation as the `nextjs-agent-rules` block at the top of this file.
 
 ## Agent — `lib/tutor.ts`, `components/chat.tsx`, `app/api/copilotkit/[...all]/`
 
@@ -114,7 +129,8 @@ AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra 
 ## Tooling — `biome.json`
 
 - Biome ignores `.claude/` and `.agents/` because their vendored skill assets fail `biome check .`, `drizzle/` because drizzle-kit's generated JSON does not match its formatter, and `public/` because Biome lints SVGs and the create-next-app artwork has no `<title>`.
-- `npm run format` skips assist actions such as import sorting; use `npx biome check --write <path>` to fix those.
+- `npm run format` skips assist actions such as import sorting; use `npx biome check --write <path>` to fix those — needed after `auth:generate` regenerates `lib/auth-schema.ts`, which comes out unsorted.
+- `.gitignore`'s `node_modules` and `dist` are unanchored (and `biome.json` excludes `!**/dist`) so they also cover `cli/` and `packages/*/` — an anchored `/node_modules` would miss `cli/node_modules`.
 
 ## Maintenance — for you, the agent
 
