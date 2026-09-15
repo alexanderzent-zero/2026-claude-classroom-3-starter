@@ -1,6 +1,6 @@
 import { RequestContext } from "@mastra/core/request-context";
 import { createTool } from "@mastra/core/tools";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, like } from "drizzle-orm";
 import type { drizzle } from "drizzle-orm/libsql/node";
 import { z } from "zod";
 import type * as schema from "@/lib/schema";
@@ -37,20 +37,64 @@ const todoShape = z.object({
 });
 
 /**
- * The one read of the list, shared by the `listTodos` tool and the sidebar's
- * own route so both show the same thing. created_at has millisecond precision,
- * so the list comes back in insertion order; id breaks the rare tie so the
- * order is stable across queries.
+ * The one read of the list, shared by the `listTodos` tool, the sidebar's own
+ * route, and the REST API's list endpoint so all three show the same thing.
+ * created_at has millisecond precision, so the list comes back in insertion
+ * order; id breaks the rare tie so the order is stable across queries. An
+ * optional `filter` narrows to titles containing it, case-insensitively.
  */
-export function listTodosFor(db: TodoDb, userId: string) {
+export function listTodosFor(
+  db: TodoDb,
+  userId: string,
+  { filter }: { filter?: string } = {},
+) {
   return db
     .select({ id: todos.id, title: todos.title, done: todos.done })
     .from(todos)
-    .where(eq(todos.userId, userId))
+    .where(
+      and(
+        eq(todos.userId, userId),
+        filter ? like(todos.title, `%${filter}%`) : undefined,
+      ),
+    )
     .orderBy(asc(todos.createdAt), asc(todos.id));
 }
 
 export type TodoItem = Awaited<ReturnType<typeof listTodosFor>>[number];
+
+/**
+ * The one write that adds an item, shared by the `addTodo` tool and the REST
+ * API's create endpoint.
+ */
+export async function addTodoFor(db: TodoDb, userId: string, title: string) {
+  const [row] = await db
+    .insert(todos)
+    .values({ userId, title: title.trim() })
+    .returning({ id: todos.id, title: todos.title, done: todos.done });
+
+  return row;
+}
+
+/**
+ * The one write that flips `done`, shared by the `setTodoDone` tool and the
+ * REST API's endpoint. Filtered by `userId` so a row belonging to another
+ * student is invisible rather than merely forbidden — this returns `undefined`
+ * for a stolen id exactly as it does for one that never existed.
+ */
+export async function setTodoDoneFor(
+  db: TodoDb,
+  userId: string,
+  id: string,
+  done: boolean,
+) {
+  const [row] = await db
+    .update(todos)
+    .set({ done })
+    .where(and(eq(todos.id, id), eq(todos.userId, userId)))
+    .returning({ id: todos.id, title: todos.title, done: todos.done });
+
+  return row;
+}
 
 /**
  * The tutor's write path onto lib/schema.ts's `todos`. Every statement is
@@ -81,14 +125,9 @@ export function createTodoTools(db: TodoDb) {
     }),
     outputSchema: z.object({ todo: todoShape }),
     requestContextSchema,
-    execute: async ({ title }, { requestContext }) => {
-      const [row] = await db
-        .insert(todos)
-        .values({ userId: requestContext.get("userId"), title: title.trim() })
-        .returning({ id: todos.id, title: todos.title, done: todos.done });
-
-      return { todo: row };
-    },
+    execute: async ({ title }, { requestContext }) => ({
+      todo: await addTodoFor(db, requestContext.get("userId"), title),
+    }),
   });
 
   const setTodoDone = createTool({
@@ -105,17 +144,11 @@ export function createTodoTools(db: TodoDb) {
         .describe("null when the student's list holds no item with that id"),
     }),
     requestContextSchema,
-    execute: async ({ id, done }, { requestContext }) => {
-      const [row] = await db
-        .update(todos)
-        .set({ done })
-        .where(
-          and(eq(todos.id, id), eq(todos.userId, requestContext.get("userId"))),
-        )
-        .returning({ id: todos.id, title: todos.title, done: todos.done });
-
-      return { todo: row ?? null };
-    },
+    execute: async ({ id, done }, { requestContext }) => ({
+      todo:
+        (await setTodoDoneFor(db, requestContext.get("userId"), id, done)) ??
+        null,
+    }),
   });
 
   return { listTodos, addTodo, setTodoDone };

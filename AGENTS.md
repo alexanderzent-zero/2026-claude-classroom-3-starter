@@ -31,7 +31,7 @@ AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra 
 - Shared primitives live in `components/ui/` and tokens and CopilotKit overrides in `app/globals.css`; document new design rules in `ai-tutor-design` before using them.
 - `/` is the chat page: a Server Component that gates on the session, then renders `PageHeader` plus the client-only `components/chat.tsx`.
 - `components/chat.tsx` owns the `CopilotKit` provider and lays out the chat beside `components/todos-sidebar.tsx`, which must stay inside that provider to reach `useAgent`.
-- The sidebar is read-only because the agent is the write path: it renders the server-rendered `initialTodos`, then refetches `GET /api/todos` (session-gated, no POST) whenever the run it subscribes to yields a tool result or ends.
+- The sidebar is read-only because the agent is the write path within the app: it renders the server-rendered `initialTodos`, then refetches the session-gated `GET /api/todos` whenever the run it subscribes to yields a tool result or ends — that route's `POST` and its `PATCH /api/todos/[id]` exist only for the REST API below, not for the sidebar.
 - It is also `hidden` below `md`, where its fixed 288px would leave the transcript about 90px; the tool-call rows report every change to the list anyway.
 - `CopilotChat` binds by `agentId` alone, so the sidebar's `useAgent({ agentId })` is that same instance — a private thread-scoped hook also requires `runtimeAgentId` and would subscribe to a separate agent.
 - `components/todo-tool-calls.tsx` registers one `useRenderTool` per tool for the transcript (status is camelCase `inProgress`/`executing`/`complete`, and `parameters` is partial until the arguments finish streaming).
@@ -41,7 +41,7 @@ AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra 
 
 - `lib/db.ts` is `server-only` and owns the cached application Drizzle connection; the auth CLI and tests construct separate connections.
 - Table definitions live in `lib/schema.ts` so drizzle-kit and tests can import them without tripping the `server-only` marker.
-- `lib/todo-tools.ts` owns the application's todo queries: `createTodoTools(db)` for the agent and `listTodosFor(db, userId)` for the page and `/api/todos`, with the db injected so a test can pass one on a temp file.
+- `lib/todo-tools.ts` owns the application's todo queries: `createTodoTools(db)` wraps them as Mastra tools for the agent, and the plain `listTodosFor`/`addTodoFor`/`setTodoDoneFor(db, userId, ...)` back the page, the sidebar's GET, and the REST API below, with the db injected so a test can pass one on a temp file.
 - `lib/auth-schema.ts` is overwritten wholesale by `auth:generate`, so app tables belong in `lib/schema.ts`, which re-exports it as the one entry point drizzle-kit and the Drizzle adapter read.
 - The driver is `drizzle-orm/libsql/node` over a `file:` URL, and drizzle-kit picks `@libsql/client` on its own — do not install `better-sqlite3`.
 - `drizzle/` is generated (edit the schema and re-run `db:generate`), and the SQLite file under the git-ignored `data/` is disposable — recreate it with `db:migrate`.
@@ -52,6 +52,16 @@ AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra 
 - `lib/auth.ts` is the app instance (explicitly `server-only`, `nextCookies()` last); `lib/auth-cli.ts` exists only because the Better Auth CLI refuses to load a module graph containing `server-only`.
 - Gate pages server-side with `auth.api.getSession({ headers: await headers() })` and `redirect()`; there is deliberately no `proxy.ts`, whose cookie check would not validate anything.
 - Email/password only: when an auth change changes the schema, regenerate it and generate and apply the migration.
+- `lib/auth.ts` also registers the `bearer()` plugin so `/api/todos` can accept `Authorization: Bearer <token>` in place of the session cookie; it adds no schema, so `lib/auth-cli.ts` doesn't need it and `auth:generate` is unaffected.
+
+## Todo REST API — `app/api/todos/`, `lib/todo-api-schema.ts`
+
+- `GET /api/todos` (optional `?filter=` substring match, case-insensitive), `POST /api/todos`, and `PATCH /api/todos/[id]` (`{ done }`) are for a future CLI or other service, not the app's own pages — see the sidebar bullet above.
+- Chose `bearer()` over `jwt()`: this API lives in the same process and shares the same session store as the cookie-based pages, so `auth.api.getSession` can verify a bearer token with the same DB-backed session lookup it already does for cookies; `jwt()`'s JWKS-based stateless verification is for a separate service that can't reach that database.
+- Each handler reads `request.headers` directly rather than `next/headers`'s `headers()`, which throws "called outside a request scope" when a handler is invoked directly instead of through a live Next.js request — the latter would make the routes untestable.
+- Every write goes through the shared query functions in `lib/todo-tools.ts` so this API and the tutor's tools can't drift apart; a `PATCH` on an id belonging to another user 404s exactly like a nonexistent id, since the query filters by `userId`.
+- Request/response shapes are zod schemas in `lib/todo-api-schema.ts`, the one module a future CLI in this repo should import rather than retyping them.
+- `tests/unit/todos-api.test.ts` builds its own `betterAuth` instance with `bearer()` + `testUtils()` over a temp db (same pattern as `tests/unit/auth.test.ts`) and mocks `@/lib/auth`/`@/lib/db` to inject it, so the bearer flow is exercised with a real minted token rather than a stub session.
 
 ## Agent — `lib/tutor.ts`, `components/chat.tsx`, `app/api/copilotkit/[...all]/`
 
@@ -78,7 +88,7 @@ AI tutoring web app on Next.js 16 App Router + React 19 + Tailwind v4: a Mastra 
 - `vitest.config.mts` resolves `@/*` through Vite's native `resolve.tsconfigPaths`, so no `vite-tsconfig-paths` plugin is needed.
 - Playwright runs Chromium only against its own `next dev` on port 3100 (override with `E2E_PORT`).
 - `next dev` refuses to start twice against one dist dir, so `next.config.ts` reads `NEXT_DIST_DIR` and the e2e server sets it to `.next-e2e`; that dir also needs a `tsconfig.json` include entry, which `next dev` adds itself.
-- The five `.test.ts` files in `tests/unit` select the node environment, while `todo-tool-calls.test.tsx` uses jsdom; the db, auth, and tutor tests point at a temp file, so they never touch `data/app.db`.
+- The `.test.ts` files in `tests/unit` select the node environment, while `todo-tool-calls.test.tsx` uses jsdom; the db, auth, tutor, and todos-api tests point at a temp file, so they never touch `data/app.db`.
 - The auth test builds its own instance from `authOptions` with the `testUtils()` plugin and an explicit `secret`/`baseURL`, because Vitest does not load `.env`.
 - `tests/e2e/auth.spec.ts` does hit `data/app.db`, so it signs up a `Date.now()`-stamped email; `playwright.config.ts` also overrides `BETTER_AUTH_URL` onto its own port.
 - `tests/unit/copilotkit-route.test.ts` mocks `@/lib/auth`, `@/lib/tutor`, and both CopilotKit/AG-UI modules, so it covers the 401 gate and the `resourceId`/`requestContext` wiring without a model call.
