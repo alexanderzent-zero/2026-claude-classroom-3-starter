@@ -8,6 +8,7 @@ import {
   NotAuthenticated,
   pollDeviceToken,
   requestDeviceCode,
+  requireToken,
   setTodoDone,
   signOut,
 } from "./api.js";
@@ -17,6 +18,7 @@ import {
   loadToken,
   saveToken,
 } from "./config.js";
+import { runMcpServer } from "./mcp.js";
 
 const program = new Command();
 
@@ -48,14 +50,6 @@ function action<Args extends unknown[]>(fn: (...args: Args) => Promise<void>) {
       process.exitCode = 1;
     }
   };
-}
-
-function requireToken(): string {
-  const token = loadToken();
-  if (!token) {
-    throw new NotAuthenticated();
-  }
-  return token;
 }
 
 /** "ABCD1234" -> "ABCD-1234", purely for the user to read back off a screen. */
@@ -203,6 +197,26 @@ program
     }),
   );
 
+program
+  .command("mcp")
+  .description(
+    "Run a Model Context Protocol server exposing the to-do commands (list, " +
+      "add, done) as tools, backed by the same login as every other command. " +
+      "Starts even when not logged in; each tool call fails with an error " +
+      "telling the caller to run `ai-tutor login` until it is.",
+  )
+  .option("--stdio", "serve over stdio (the only transport this supports)")
+  .action(
+    action(async (options: { stdio?: boolean }) => {
+      if (!options.stdio) {
+        throw new ApiError(
+          "Only --stdio is supported: run `ai-tutor mcp --stdio`.",
+        );
+      }
+      await runMcpServer();
+    }),
+  );
+
 program.addHelpText(
   "after",
   [
@@ -218,6 +232,7 @@ program.addHelpText(
     "  $ ai-tutor list --filter milk",
     "  $ ai-tutor done 3f9c1e2a-2b7e-4b0a-9c1a-1b2c3d4e5f60",
     "  $ ai-tutor logout",
+    "  $ ai-tutor mcp --stdio",
   ].join("\n"),
 );
 

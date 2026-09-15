@@ -15,11 +15,13 @@
   },
   "dependencies": {
     "@ai-tutor/todo-api-schema": "*",
+    "@modelcontextprotocol/server": "^2.0.0",
     "commander": "^15.0.0"
   },
   "devDependencies": {
     "@better-auth/drizzle-adapter": "^1.7.4",
     "@libsql/client": "^0.18.0",
+    "@modelcontextprotocol/client": "^2.0.0",
     "@types/node": "^26.5.1",
     "better-auth": "^1.7.4",
     "drizzle-orm": "^0.45.2",

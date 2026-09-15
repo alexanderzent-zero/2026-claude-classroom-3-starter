@@ -6,7 +6,7 @@ import {
   setTodoDoneResponseSchema,
   type Todo,
 } from "@ai-tutor/todo-api-schema";
-import { serverUrl } from "./config.js";
+import { loadToken, serverUrl } from "./config.js";
 
 export type { Todo };
 
@@ -20,6 +20,15 @@ export class NotAuthenticated extends ApiError {
   constructor() {
     super("Not logged in, or the session expired. Run `ai-tutor login`.");
   }
+}
+
+/** Shared by every command and MCP tool that needs a session before doing anything else. */
+export function requireToken(): string {
+  const token = loadToken();
+  if (!token) {
+    throw new NotAuthenticated();
+  }
+  return token;
 }
 
 function authApiUrl(path: string): URL {

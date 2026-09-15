@@ -21,6 +21,7 @@ node_modules
 /.next/
 /.next-e2e/
 /.next-cli-test/
+/.next-mcp-test/
 /out/
 
 # production
